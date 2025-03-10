@@ -1,0 +1,28 @@
+# Server configuration
+server:
+  # Host to bind the server to
+  host: "localhost"
+  # Port to listen on
+  port: 8080
+
+# Database configuration
+database:
+  # Database type (memory, sqlite, mysql)
+  type: "memory"
+  # SQLite configuration (uncomment if using SQLite)
+  # sqlite:
+  #   path: "data/github.db"
+  # MySQL configuration (uncomment if using MySQL)
+  # mysql:
+  #   host: "localhost"
+  #   port: 3306
+  #   user: "root"
+  #   password: "password"
+  #   database: "github"
+
+# GitHub configuration
+github:
+  # Number of items to fetch per request
+  items_per_fetch: 100
+  # GitHub API token (optional, increases rate limits)
+  # token: "your-github-token" 

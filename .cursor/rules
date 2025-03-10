@@ -1,0 +1,95 @@
+# GitHub Repository Management Service
+
+## Project Overview
+A Go-based HTTP server that provides an OpenAPI interface to manage different GitHub repositories in one place. The service will use the `gh` CLI tool to interact with GitHub and will cache repository data in SQLite (with MySQL support planned for the future).
+
+## Core Requirements
+1. **GitHub Integration**:
+   - Use `gh` CLI for GitHub interactions
+   - Support for both public and private repositories
+   - Support for repositories across different organizations
+
+2. **Repository Management**:
+   - Add/remove GitHub repositories
+   - Support for repositories in different organizations
+   - Handle both public and private repositories
+
+3. **PR and Issue Management**:
+   - List PRs and issues for all repositories
+   - Filter by name, author, etc.
+   - Group by date, repository, etc.
+   - Default ordering by date (descending)
+   - Pagination support
+
+4. **Data Caching**:
+   - Use SQLite for local caching
+   - Abstract cache interface to support MySQL in the future
+   - Implement regular and forced data refresh mechanisms
+   - Fetch latest changes (default: 10) and older changes as needed
+   - Respect GitHub API rate limits
+
+5. **API**:
+   - Well-defined OpenAPI specification
+   - CLI tool for interaction
+
+## Project Structure
+```
+github-repos-management/
+├── cmd/                    # Command-line applications
+│   ├── server/             # HTTP server entry point
+│   └── cli/                # CLI client
+├── internal/               # Private application code
+│   ├── api/                # API handlers and routes
+│   ├── config/             # Configuration management
+│   ├── github/             # GitHub integration
+│   ├── models/             # Data models
+│   ├── cache/              # Cache interface and implementations
+│   │   ├── sqlite/         # SQLite implementation
+│   │   └── mysql/          # MySQL implementation (future)
+│   └── service/            # Business logic
+├── pkg/                    # Public libraries
+│   └── utils/              # Utility functions
+├── api/                    # API documentation
+│   └── openapi.yaml        # OpenAPI specification
+├── scripts/                # Utility scripts
+├── docs/                   # Documentation
+├── .github/                # GitHub workflows
+├── go.mod                  # Go module file
+└── README.md               # Project documentation
+```
+
+## Coding Standards
+1. Follow Go best practices and idiomatic Go
+2. Use meaningful variable and function names
+3. Write comprehensive tests for all components
+4. Document all public APIs and functions
+5. Handle errors appropriately
+6. Use context for cancellation and timeouts
+7. Implement proper logging
+8. Follow RESTful API design principles
+
+## Implementation Plan
+1. Set up project structure and dependencies
+2. Implement GitHub integration using `gh` CLI
+3. Create data models and database schema
+4. Implement cache interface and SQLite implementation
+5. Develop core business logic services
+6. Create API handlers and routes
+7. Implement OpenAPI specification
+8. Develop CLI client
+9. Add comprehensive tests
+10. Document the project
+
+## Performance Considerations
+1. Efficient caching strategy to minimize GitHub API calls
+2. Pagination for large result sets
+3. Proper indexing in the database
+4. Rate limiting and backoff strategies for GitHub API
+5. Concurrent processing where appropriate
+
+## Security Considerations
+1. Secure handling of GitHub credentials
+2. Input validation for all API endpoints
+3. Proper error handling without leaking sensitive information
+4. Rate limiting for API endpoints
+5. Authentication and authorization for the service API 
