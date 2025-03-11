@@ -40,24 +40,26 @@ type Repository struct {
 
 // PullRequest represents a GitHub pull request
 type PullRequest struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	State     string `json:"state"`
-	HTMLURL   string `json:"html_url"`
-	UserLogin string `json:"user_login"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	Number             int    `json:"number"`
+	Title              string `json:"title"`
+	State              string `json:"state"`
+	HTMLURL            string `json:"html_url"`
+	UserLogin          string `json:"user_login"`
+	CreatedAt          string `json:"created_at"`
+	UpdatedAt          string `json:"updated_at"`
+	RepositoryFullName string `json:"RepositoryFullName"`
 }
 
 // Issue represents a GitHub issue
 type Issue struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	State     string `json:"state"`
-	HTMLURL   string `json:"html_url"`
-	UserLogin string `json:"user_login"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	Number             int    `json:"number"`
+	Title              string `json:"title"`
+	State              string `json:"state"`
+	HTMLURL            string `json:"html_url"`
+	UserLogin          string `json:"user_login"`
+	CreatedAt          string `json:"created_at"`
+	UpdatedAt          string `json:"updated_at"`
+	RepositoryFullName string `json:"RepositoryFullName"`
 }
 
 // Pagination represents pagination information

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -240,8 +241,8 @@ func newPRCmd() *cobra.Command {
 
 			// Print table
 			fmt.Printf("Pull Requests (%d/%d):\n", len(resp.Data), resp.Pagination.Total)
-			fmt.Println("NUMBER\tTITLE\tSTATE\tAUTHOR\tUPDATED")
-			fmt.Println("------\t-----\t-----\t------\t-------")
+			fmt.Println("REPO\tNUMBER\tTITLE\tSTATE\tAUTHOR\tUPDATED")
+			fmt.Println("----\t------\t-----\t-----\t------\t-------")
 			for _, pr := range resp.Data {
 				updatedAt := "Never"
 				if pr.UpdatedAt != "" && pr.UpdatedAt != "0001-01-01T00:00:00Z" {
@@ -250,7 +251,7 @@ func newPRCmd() *cobra.Command {
 						updatedAt = parsedTime.Format("2006-01-02 15:04:05")
 					}
 				}
-				fmt.Printf("#%d\t%s\t%s\t%s\t%s\n", pr.Number, truncate(pr.Title, 30), pr.State, pr.UserLogin, updatedAt)
+				fmt.Printf("%s\t#%d\t%s\t%s\t%s\t%s\n", pr.RepositoryFullName, pr.Number, truncate(pr.Title, 30), pr.State, pr.UserLogin, updatedAt)
 			}
 			fmt.Printf("\nPage %d of %d\n", resp.Pagination.Page, resp.Pagination.TotalPages)
 		},
@@ -338,8 +339,8 @@ func newIssueCmd() *cobra.Command {
 
 			// Print table
 			fmt.Printf("Issues (%d/%d):\n", len(resp.Data), resp.Pagination.Total)
-			fmt.Println("NUMBER\tTITLE\tSTATE\tAUTHOR\tUPDATED")
-			fmt.Println("------\t-----\t-----\t------\t-------")
+			fmt.Println("REPO\tNUMBER\tTITLE\tSTATE\tAUTHOR\tUPDATED")
+			fmt.Println("----\t------\t-----\t-----\t------\t-------")
 			for _, issue := range resp.Data {
 				updatedAt := "Never"
 				if issue.UpdatedAt != "" && issue.UpdatedAt != "0001-01-01T00:00:00Z" {
@@ -348,7 +349,7 @@ func newIssueCmd() *cobra.Command {
 						updatedAt = parsedTime.Format("2006-01-02 15:04:05")
 					}
 				}
-				fmt.Printf("#%d\t%s\t%s\t%s\t%s\n", issue.Number, truncate(issue.Title, 30), issue.State, issue.UserLogin, updatedAt)
+				fmt.Printf("%s\t#%d\t%s\t%s\t%s\t%s\n", issue.RepositoryFullName, issue.Number, truncate(issue.Title, 30), issue.State, issue.UserLogin, updatedAt)
 			}
 			fmt.Printf("\nPage %d of %d\n", resp.Pagination.Page, resp.Pagination.TotalPages)
 		},
@@ -434,8 +435,13 @@ func newServiceCmd() *cobra.Command {
 
 // printJSON prints data as JSON
 func printJSON(data interface{}) {
-	// TODO: Implement JSON output
-	fmt.Printf("%+v\n", data)
+	// Use the encoding/json package to properly format JSON output
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		fmt.Printf("Error formatting JSON: %v\n", err)
+		return
+	}
+	fmt.Println(string(jsonData))
 }
 
 // truncate truncates a string to a maximum length
