@@ -1,453 +1,332 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	apiURL  string
-	client  *Client
-	page    int
-	perPage int
-	format  string
 	verbose bool
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "ghrepos",
-	Short: "GitHub Repository Management CLI",
-	Long: `A command-line interface for the GitHub Repository Management Service.
-This CLI allows you to manage GitHub repositories, pull requests, and issues.`,
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		client = NewClient(apiURL)
-	},
-}
-
-func init() {
-	// Global flags
-	rootCmd.PersistentFlags().StringVar(&apiURL, "api-url", "http://localhost:8080", "API server URL")
-	rootCmd.PersistentFlags().IntVar(&page, "page", 1, "Page number for pagination")
-	rootCmd.PersistentFlags().IntVar(&perPage, "per-page", 30, "Number of items per page")
-	rootCmd.PersistentFlags().StringVar(&format, "format", "table", "Output format (table, json)")
-	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "Verbose output")
-
-	// Add repository commands
-	rootCmd.AddCommand(newRepoCmd())
-
-	// Add pull request commands
-	rootCmd.AddCommand(newPRCmd())
-
-	// Add issue commands
-	rootCmd.AddCommand(newIssueCmd())
-
-	// Add service commands
-	rootCmd.AddCommand(newServiceCmd())
-}
-
 func main() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	// Root command
+	rootCmd := &cobra.Command{
+		Use:   "ghrepos",
+		Short: "GitHub Repository Management CLI",
+		Long:  "A CLI tool to manage and track GitHub repositories directly",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			// No need to initialize client here as each command creates its own client
+			cmd.SetContext(cmd.Context())
+		},
 	}
-}
 
-// Repository commands
-func newRepoCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	// Add global flags
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
+
+	// Repository command
+	repoCmd := &cobra.Command{
 		Use:   "repo",
-		Short: "Manage repositories",
-		Long:  `Add, remove, and list GitHub repositories being tracked by the service.`,
+		Short: "Manage tracked repositories",
+		Long:  "Track, untrack, and list GitHub repositories directly",
 	}
 
-	// Add subcommands
-	cmd.AddCommand(
-		&cobra.Command{
-			Use:   "list",
-			Short: "List all tracked repositories",
-			Run: func(cmd *cobra.Command, args []string) {
-				// Get repositories
-				resp, err := client.ListRepositories(page, perPage)
-				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-					return
-				}
+	// Add repository command
+	addRepoCmd := &cobra.Command{
+		Use:   "add [owner/name]",
+		Short: "Add a repository to track",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			client, err := NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error initializing client: %v\n", err)
+				os.Exit(1)
+			}
 
-				// Print repositories
-				if format == "json" {
-					printJSON(resp)
-					return
-				}
+			repo, err := client.AddRepository(args[0])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error adding repository: %v\n", err)
+				os.Exit(1)
+			}
 
-				// Print table
-				fmt.Printf("Repositories (%d/%d):\n", len(resp.Data), resp.Pagination.Total)
-				fmt.Println("OWNER/NAME\tPRIVATE\tLAST SYNCED")
-				fmt.Println("----------\t-------\t-----------")
-				for _, repo := range resp.Data {
-					lastSynced := "Never"
-					if repo.LastSyncedAt != "" && repo.LastSyncedAt != "0001-01-01T00:00:00Z" {
-						parsedTime, err := time.Parse(time.RFC3339, repo.LastSyncedAt)
-						if err == nil {
-							lastSynced = parsedTime.Format("2006-01-02 15:04:05")
-						}
-					}
-					fmt.Printf("%s/%s\t%v\t%s\n", repo.Owner, repo.Name, repo.IsPrivate, lastSynced)
-				}
-				fmt.Printf("\nPage %d of %d\n", resp.Pagination.Page, resp.Pagination.TotalPages)
-			},
+			fmt.Printf("Repository %s added successfully\n", repo.FullName)
 		},
-		&cobra.Command{
-			Use:   "add [owner/repo]",
-			Short: "Add a repository to track",
-			Args:  cobra.ExactArgs(1),
-			Run: func(cmd *cobra.Command, args []string) {
-				// Add repository
-				repo, err := client.AddRepository(args[0])
-				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-					return
-				}
+	}
 
-				// Print repository
-				if format == "json" {
-					printJSON(repo)
-					return
-				}
+	// List repositories command
+	listRepoCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List tracked repositories",
+		Run: func(cmd *cobra.Command, args []string) {
+			client, err := NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error initializing client: %v\n", err)
+				os.Exit(1)
+			}
 
-				fmt.Printf("Repository added: %s/%s\n", repo.Owner, repo.Name)
-			},
+			page, _ := cmd.Flags().GetInt("page")
+			perPage, _ := cmd.Flags().GetInt("per-page")
+
+			resp, err := client.ListRepositories(page, perPage)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error listing repositories: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Print repositories
+			fmt.Printf("%-40s %-20s %-20s %s\n", "REPOSITORY", "PRIVATE", "LAST SYNCED", "URL")
+			for _, repo := range resp.Data {
+				lastSynced := repo.LastSyncedAt.Format("2006-01-02 15:04:05")
+				isPrivate := "No"
+				if repo.IsPrivate {
+					isPrivate = "Yes"
+				}
+				fmt.Printf("%-40s %-20s %-20s %s\n", repo.FullName, isPrivate, lastSynced, repo.HTMLURL)
+			}
+
+			// Print pagination info
+			fmt.Printf("\nPage %d of %d (Total: %d)\n", resp.Pagination.Page, resp.Pagination.TotalPages, resp.Pagination.Total)
 		},
-		&cobra.Command{
-			Use:   "remove [owner/repo]",
-			Short: "Remove a repository from tracking",
-			Args:  cobra.ExactArgs(1),
-			Run: func(cmd *cobra.Command, args []string) {
-				// Parse owner and repo
+	}
+	listRepoCmd.Flags().IntP("page", "p", 1, "Page number")
+	listRepoCmd.Flags().IntP("per-page", "n", 10, "Items per page")
+
+	// Remove repository command
+	removeRepoCmd := &cobra.Command{
+		Use:   "remove [owner/name]",
+		Short: "Remove a repository from tracking",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			client, err := NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error initializing client: %v\n", err)
+				os.Exit(1)
+			}
+
+			parts := strings.Split(args[0], "/")
+			if len(parts) != 2 {
+				fmt.Fprintf(os.Stderr, "Invalid repository name format, expected 'owner/repo'\n")
+				os.Exit(1)
+			}
+			owner, name := parts[0], parts[1]
+
+			err = client.RemoveRepository(owner, name)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error removing repository: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Repository %s removed successfully\n", args[0])
+		},
+	}
+
+	// Refresh repository command
+	refreshRepoCmd := &cobra.Command{
+		Use:   "refresh [owner/name]",
+		Short: "Refresh repository data",
+		Args:  cobra.MaximumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			client, err := NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error initializing client: %v\n", err)
+				os.Exit(1)
+			}
+
+			if len(args) == 0 {
+				// Refresh all repositories
+				err = client.RefreshAll()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error refreshing repositories: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Println("All repositories refreshed successfully")
+			} else {
+				// Refresh specific repository
 				parts := strings.Split(args[0], "/")
 				if len(parts) != 2 {
-					fmt.Println("Error: Invalid repository name format, expected 'owner/repo'")
-					return
+					fmt.Fprintf(os.Stderr, "Invalid repository name format, expected 'owner/repo'\n")
+					os.Exit(1)
 				}
-				owner, repo := parts[0], parts[1]
+				owner, name := parts[0], parts[1]
 
-				// Remove repository
-				err := client.RemoveRepository(owner, repo)
+				err = client.RefreshRepository(owner, name)
 				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-					return
+					fmt.Fprintf(os.Stderr, "Error refreshing repository: %v\n", err)
+					os.Exit(1)
 				}
-
-				fmt.Printf("Repository removed: %s/%s\n", owner, repo)
-			},
+				fmt.Printf("Repository %s refreshed successfully\n", args[0])
+			}
 		},
-		&cobra.Command{
-			Use:   "refresh [owner/repo]",
-			Short: "Force refresh of repository data",
-			Args:  cobra.ExactArgs(1),
-			Run: func(cmd *cobra.Command, args []string) {
-				// Parse owner and repo
-				parts := strings.Split(args[0], "/")
-				if len(parts) != 2 {
-					fmt.Println("Error: Invalid repository name format, expected 'owner/repo'")
-					return
-				}
-				owner, repo := parts[0], parts[1]
+	}
 
-				// Refresh repository
-				err := client.RefreshRepository(owner, repo)
-				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-					return
-				}
-
-				fmt.Printf("Repository refresh initiated: %s/%s\n", owner, repo)
-			},
-		},
-	)
-
-	return cmd
-}
-
-// Pull request commands
-func newPRCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	// Pull request command
+	prCmd := &cobra.Command{
 		Use:   "pr",
 		Short: "Manage pull requests",
-		Long:  `List and filter pull requests across all tracked repositories.`,
+		Long:  "List and filter pull requests from tracked repositories",
 	}
 
-	// Add subcommands
-	listCmd := &cobra.Command{
+	// List pull requests command
+	listPRCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List pull requests",
 		Run: func(cmd *cobra.Command, args []string) {
-			// Parse flags
-			state, _ := cmd.Flags().GetString("state")
-			author, _ := cmd.Flags().GetString("author")
-			repo, _ := cmd.Flags().GetString("repo")
-			label, _ := cmd.Flags().GetString("label")
-			sortBy, _ := cmd.Flags().GetString("sort-by")
-			direction, _ := cmd.Flags().GetString("direction")
-			since, _ := cmd.Flags().GetString("since")
-			groupBy, _ := cmd.Flags().GetString("group-by")
+			client, err := NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error initializing client: %v\n", err)
+				os.Exit(1)
+			}
 
-			// Build params
+			// Get filter parameters
 			params := make(map[string]string)
-			params["page"] = strconv.Itoa(page)
-			params["per_page"] = strconv.Itoa(perPage)
-			if state != "" {
-				params["state"] = state
-			}
-			if author != "" {
-				params["author"] = author
-			}
-			if repo != "" {
-				params["repo"] = repo
-			}
-			if label != "" {
-				params["label"] = label
-			}
-			if sortBy != "" {
-				params["sort"] = sortBy
-			}
-			if direction != "" {
-				params["direction"] = direction
-			}
-			if since != "" {
-				params["since"] = since
-			}
-			if groupBy != "" {
-				params["group_by"] = groupBy
-			}
+			params["state"], _ = cmd.Flags().GetString("state")
+			params["author"], _ = cmd.Flags().GetString("author")
+			params["repo"], _ = cmd.Flags().GetString("repo")
+			params["sort"], _ = cmd.Flags().GetString("sort")
+			params["direction"], _ = cmd.Flags().GetString("direction")
+			page, _ := cmd.Flags().GetInt("page")
+			perPage, _ := cmd.Flags().GetInt("per-page")
+			params["page"] = fmt.Sprintf("%d", page)
+			params["per_page"] = fmt.Sprintf("%d", perPage)
 
-			// Get pull requests
 			resp, err := client.ListPullRequests(params)
 			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				return
+				fmt.Fprintf(os.Stderr, "Error listing pull requests: %v\n", err)
+				os.Exit(1)
 			}
 
 			// Print pull requests
-			if format == "json" {
-				printJSON(resp)
-				return
+			fmt.Printf("%-40s %-5s %-20s %-12s %s\n", "REPOSITORY", "NUM", "AUTHOR", "STATE", "TITLE")
+			for _, pr := range resp.Data {
+				fmt.Printf("%-40s %-5d %-20s %-12s %s\n", pr.RepositoryFullName, pr.Number, pr.UserLogin, pr.State, pr.Title)
 			}
 
-			// Print table
-			fmt.Printf("Pull Requests (%d/%d):\n", len(resp.Data), resp.Pagination.Total)
-			fmt.Println("REPO\tNUMBER\tTITLE\tSTATE\tAUTHOR\tUPDATED")
-			fmt.Println("----\t------\t-----\t-----\t------\t-------")
-			for _, pr := range resp.Data {
-				updatedAt := "Never"
-				if pr.UpdatedAt != "" && pr.UpdatedAt != "0001-01-01T00:00:00Z" {
-					parsedTime, err := time.Parse(time.RFC3339, pr.UpdatedAt)
-					if err == nil {
-						updatedAt = parsedTime.Format("2006-01-02 15:04:05")
-					}
-				}
-				fmt.Printf("%s\t#%d\t%s\t%s\t%s\t%s\n", pr.RepositoryFullName, pr.Number, truncate(pr.Title, 30), pr.State, pr.UserLogin, updatedAt)
-			}
-			fmt.Printf("\nPage %d of %d\n", resp.Pagination.Page, resp.Pagination.TotalPages)
+			// Print pagination info
+			fmt.Printf("\nPage %d of %d (Total: %d)\n", resp.Pagination.Page, resp.Pagination.TotalPages, resp.Pagination.Total)
 		},
 	}
+	listPRCmd.Flags().StringP("state", "s", "open", "Filter by state (open, closed, all)")
+	listPRCmd.Flags().StringP("author", "a", "", "Filter by author")
+	listPRCmd.Flags().StringP("repo", "r", "", "Filter by repository (owner/name)")
+	listPRCmd.Flags().String("sort", "created", "Sort by (created, updated)")
+	listPRCmd.Flags().String("direction", "desc", "Sort direction (asc, desc)")
+	listPRCmd.Flags().IntP("page", "p", 1, "Page number")
+	listPRCmd.Flags().IntP("per-page", "n", 10, "Items per page")
 
-	// Add flags for filtering
-	listCmd.Flags().String("state", "open", "Filter by PR state (open, closed, all)")
-	listCmd.Flags().String("author", "", "Filter by PR author")
-	listCmd.Flags().String("repo", "", "Filter by repository (owner/repo)")
-	listCmd.Flags().String("label", "", "Filter by label")
-	listCmd.Flags().String("sort-by", "", "Sort by field")
-	listCmd.Flags().String("direction", "", "Sort direction")
-	listCmd.Flags().String("since", "", "Filter pull requests since a certain date")
-	listCmd.Flags().String("group-by", "", "Group pull requests by field")
-
-	cmd.AddCommand(listCmd)
-
-	return cmd
-}
-
-// Issue commands
-func newIssueCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	// Issue command
+	issueCmd := &cobra.Command{
 		Use:   "issue",
 		Short: "Manage issues",
-		Long:  `List and filter issues across all tracked repositories.`,
+		Long:  "List and filter issues from tracked repositories",
 	}
 
-	// Add subcommands
-	listCmd := &cobra.Command{
+	// List issues command
+	listIssueCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List issues",
 		Run: func(cmd *cobra.Command, args []string) {
-			// Parse flags
-			state, _ := cmd.Flags().GetString("state")
-			author, _ := cmd.Flags().GetString("author")
-			repo, _ := cmd.Flags().GetString("repo")
-			label, _ := cmd.Flags().GetString("label")
-			sortBy, _ := cmd.Flags().GetString("sort-by")
-			direction, _ := cmd.Flags().GetString("direction")
-			since, _ := cmd.Flags().GetString("since")
-			groupBy, _ := cmd.Flags().GetString("group-by")
+			client, err := NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error initializing client: %v\n", err)
+				os.Exit(1)
+			}
 
-			// Build params
+			// Get filter parameters
 			params := make(map[string]string)
-			params["page"] = strconv.Itoa(page)
-			params["per_page"] = strconv.Itoa(perPage)
-			if state != "" {
-				params["state"] = state
-			}
-			if author != "" {
-				params["author"] = author
-			}
-			if repo != "" {
-				params["repo"] = repo
-			}
-			if label != "" {
-				params["label"] = label
-			}
-			if sortBy != "" {
-				params["sort"] = sortBy
-			}
-			if direction != "" {
-				params["direction"] = direction
-			}
-			if since != "" {
-				params["since"] = since
-			}
-			if groupBy != "" {
-				params["group_by"] = groupBy
-			}
+			params["state"], _ = cmd.Flags().GetString("state")
+			params["author"], _ = cmd.Flags().GetString("author")
+			params["repo"], _ = cmd.Flags().GetString("repo")
+			params["sort"], _ = cmd.Flags().GetString("sort")
+			params["direction"], _ = cmd.Flags().GetString("direction")
+			page, _ := cmd.Flags().GetInt("page")
+			perPage, _ := cmd.Flags().GetInt("per-page")
+			params["page"] = fmt.Sprintf("%d", page)
+			params["per_page"] = fmt.Sprintf("%d", perPage)
 
-			// Get issues
 			resp, err := client.ListIssues(params)
 			if err != nil {
-				fmt.Printf("Error: %v\n", err)
-				return
+				fmt.Fprintf(os.Stderr, "Error listing issues: %v\n", err)
+				os.Exit(1)
 			}
 
 			// Print issues
-			if format == "json" {
-				printJSON(resp)
-				return
-			}
-
-			// Print table
-			fmt.Printf("Issues (%d/%d):\n", len(resp.Data), resp.Pagination.Total)
-			fmt.Println("REPO\tNUMBER\tTITLE\tSTATE\tAUTHOR\tUPDATED")
-			fmt.Println("----\t------\t-----\t-----\t------\t-------")
+			fmt.Printf("%-40s %-5s %-20s %-12s %s\n", "REPOSITORY", "NUM", "AUTHOR", "STATE", "TITLE")
 			for _, issue := range resp.Data {
-				updatedAt := "Never"
-				if issue.UpdatedAt != "" && issue.UpdatedAt != "0001-01-01T00:00:00Z" {
-					parsedTime, err := time.Parse(time.RFC3339, issue.UpdatedAt)
-					if err == nil {
-						updatedAt = parsedTime.Format("2006-01-02 15:04:05")
-					}
-				}
-				fmt.Printf("%s\t#%d\t%s\t%s\t%s\t%s\n", issue.RepositoryFullName, issue.Number, truncate(issue.Title, 30), issue.State, issue.UserLogin, updatedAt)
+				fmt.Printf("%-40s %-5d %-20s %-12s %s\n", issue.RepositoryFullName, issue.Number, issue.UserLogin, issue.State, issue.Title)
 			}
-			fmt.Printf("\nPage %d of %d\n", resp.Pagination.Page, resp.Pagination.TotalPages)
+
+			// Print pagination info
+			fmt.Printf("\nPage %d of %d (Total: %d)\n", resp.Pagination.Page, resp.Pagination.TotalPages, resp.Pagination.Total)
+		},
+	}
+	listIssueCmd.Flags().StringP("state", "s", "open", "Filter by state (open, closed, all)")
+	listIssueCmd.Flags().StringP("author", "a", "", "Filter by author")
+	listIssueCmd.Flags().StringP("repo", "r", "", "Filter by repository (owner/name)")
+	listIssueCmd.Flags().String("sort", "created", "Sort by (created, updated)")
+	listIssueCmd.Flags().String("direction", "desc", "Sort direction (asc, desc)")
+	listIssueCmd.Flags().IntP("page", "p", 1, "Page number")
+	listIssueCmd.Flags().IntP("per-page", "n", 10, "Items per page")
+
+	// Status command
+	statusCmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show service status",
+		Run: func(cmd *cobra.Command, args []string) {
+			client, err := NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error initializing client: %v\n", err)
+				os.Exit(1)
+			}
+
+			status, err := client.GetStatus()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error getting status: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Print status
+			fmt.Println("Service Status:")
+			fmt.Printf("  Status: %s\n", status["status"])
+			fmt.Printf("  Version: %s\n", status["version"])
+
+			// Print repository stats
+			if repoStats, ok := status["repositories"].(map[string]interface{}); ok {
+				fmt.Println("\nRepositories:")
+				fmt.Printf("  Total: %v\n", repoStats["total"])
+				fmt.Printf("  Syncing: %v\n", repoStats["syncing"])
+				fmt.Printf("  Error: %v\n", repoStats["error"])
+			}
+
+			// Print GitHub rate limit
+			if rateLimit, ok := status["github_rate_limit"].(map[string]interface{}); ok {
+				fmt.Println("\nGitHub Rate Limit:")
+				fmt.Printf("  Limit: %v\n", rateLimit["limit"])
+				fmt.Printf("  Remaining: %v\n", rateLimit["remaining"])
+				if resetAt, ok := rateLimit["reset_at"].(string); ok {
+					fmt.Printf("  Reset At: %s\n", resetAt)
+				}
+			}
 		},
 	}
 
-	// Add flags for filtering
-	listCmd.Flags().String("state", "open", "Filter by issue state (open, closed, all)")
-	listCmd.Flags().String("author", "", "Filter by issue author")
-	listCmd.Flags().String("repo", "", "Filter by repository (owner/repo)")
-	listCmd.Flags().String("label", "", "Filter by label")
-	listCmd.Flags().String("sort-by", "", "Sort by field")
-	listCmd.Flags().String("direction", "", "Sort direction")
-	listCmd.Flags().String("since", "", "Filter issues since a certain date")
-	listCmd.Flags().String("group-by", "", "Group issues by field")
+	// Add commands to repo command
+	repoCmd.AddCommand(addRepoCmd, listRepoCmd, removeRepoCmd, refreshRepoCmd)
 
-	cmd.AddCommand(listCmd)
+	// Add commands to pr command
+	prCmd.AddCommand(listPRCmd)
 
-	return cmd
-}
+	// Add commands to issue command
+	issueCmd.AddCommand(listIssueCmd)
 
-// Service commands
-func newServiceCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "service",
-		Short: "Manage the service",
-		Long:  `Manage the GitHub Repository Management Service.`,
+	// Add commands to root command
+	rootCmd.AddCommand(repoCmd, prCmd, issueCmd, statusCmd)
+
+	// Execute
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
-
-	// Add subcommands
-	cmd.AddCommand(
-		&cobra.Command{
-			Use:   "refresh",
-			Short: "Force refresh of GitHub data",
-			Run: func(cmd *cobra.Command, args []string) {
-				// Refresh all data
-				err := client.RefreshAll()
-				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-					return
-				}
-
-				fmt.Println("Refresh initiated for all repositories")
-			},
-		},
-		&cobra.Command{
-			Use:   "status",
-			Short: "Get service status",
-			Run: func(cmd *cobra.Command, args []string) {
-				// Get status
-				status, err := client.GetStatus()
-				if err != nil {
-					fmt.Printf("Error: %v\n", err)
-					return
-				}
-
-				// Print status
-				if format == "json" {
-					printJSON(status)
-					return
-				}
-
-				// Print table
-				fmt.Printf("Service Status: %s\n", status["status"])
-				fmt.Printf("Version: %s\n", status["version"])
-				fmt.Printf("Uptime: %d seconds\n", int(status["uptime"].(float64)))
-
-				// Print repositories
-				repos := status["repositories"].(map[string]interface{})
-				fmt.Printf("Repositories: %d total, %d syncing, %d error\n", int(repos["total"].(float64)), int(repos["syncing"].(float64)), int(repos["error"].(float64)))
-
-				// Print rate limit
-				rateLimit := status["github_rate_limit"].(map[string]interface{})
-				resetAt, _ := time.Parse(time.RFC3339, rateLimit["reset_at"].(string))
-				fmt.Printf("GitHub Rate Limit: %d/%d (resets at %s)\n", int(rateLimit["remaining"].(float64)), int(rateLimit["limit"].(float64)), resetAt.Format("15:04:05"))
-			},
-		},
-	)
-
-	return cmd
-}
-
-// Helper functions
-
-// printJSON prints data as JSON
-func printJSON(data interface{}) {
-	// Use the encoding/json package to properly format JSON output
-	jsonData, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		fmt.Printf("Error formatting JSON: %v\n", err)
-		return
-	}
-	fmt.Println(string(jsonData))
-}
-
-// truncate truncates a string to a maximum length
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
 }

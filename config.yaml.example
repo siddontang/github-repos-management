@@ -1,14 +1,9 @@
-# Server configuration
-server:
-  # Host to bind the server to
-  host: "localhost"
-  # Port to listen on
-  port: 8080
-
 # Database configuration
 database:
-  # Database type (memory, sqlite, mysql)
-  type: "memory"
+  # Database type (file, sqlite, mysql)
+  type: "file"
+  # Path to the database file
+  path: "data/github-repos.db"
   # SQLite configuration (uncomment if using SQLite)
   # sqlite:
   #   path: "data/github.db"

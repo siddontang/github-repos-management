@@ -1,63 +1,60 @@
 # GitHub Repository Management
 
-A tool for managing and tracking GitHub repositories, pull requests, and issues.
+A CLI tool for managing and tracking GitHub repositories, pull requests, and issues.
 
 ## Features
 
 - Track multiple GitHub repositories
 - View pull requests and issues across all tracked repositories
 - Filter by state, author, repository, and more
-- Automatic synchronization with GitHub
-- In-memory caching for fast access
+- Direct integration with GitHub API
+- File-based persistence for data storage
 
 ## Installation
 
 ### Prerequisites
 
 - Go 1.16 or higher
-- GitHub CLI (`gh`) installed and authenticated
+- GitHub personal access token with appropriate permissions
 
 ### Building from source
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/github-repos-management.git
+   git clone https://github.com/siddontang/github-repos-management.git
    cd github-repos-management
    ```
 
-2. Build the server and CLI:
+2. Build the CLI using the Makefile:
    ```
-   go build -o bin/server ./cmd/server
+   make build
+   ```
+
+   Or build directly:
+   ```
    go build -o bin/ghrepos ./cmd/cli
    ```
 
 ## Configuration
 
-1. Copy the example configuration file:
-   ```
-   cp config.yaml.example config.yaml
-   ```
+The CLI uses GitHub authentication from your environment. Make sure you have the `GITHUB_TOKEN` environment variable set:
 
-2. Edit the configuration file to match your requirements:
-   ```yaml
-   server:
-     host: "localhost"
-     port: 8080
+```bash
+export GITHUB_TOKEN=your_github_personal_access_token
+```
 
-   database:
-     type: "memory"
+You can also configure the application by creating a `config.yaml` file:
 
-   github:
-     items_per_fetch: 100
-   ```
+```yaml
+database:
+  type: "file"
+  path: "data/github-repos.db"
+
+github:
+  items_per_fetch: 100
+```
 
 ## Usage
-
-### Starting the server
-
-```
-./bin/server -config config.yaml
-```
 
 ### Using the CLI
 
@@ -77,6 +74,9 @@ The CLI provides commands for managing repositories, pull requests, and issues.
 
 # Refresh a repository
 ./bin/ghrepos repo refresh owner/repo
+
+# Refresh all repositories
+./bin/ghrepos repo refresh
 ```
 
 #### Pull request commands
@@ -111,14 +111,33 @@ The CLI provides commands for managing repositories, pull requests, and issues.
 ./bin/ghrepos issue list --author username
 ```
 
-#### Service commands
+#### Status command
 
 ```
 # Get service status
-./bin/ghrepos service status
+./bin/ghrepos status
+```
 
-# Refresh all repositories
-./bin/ghrepos service refresh
+## Architecture
+
+The CLI directly integrates with the GitHub API through a service layer, providing:
+
+- Direct GitHub API access
+- File-based database for persistent storage
+- Simplified data model for repositories, pull requests, and issues
+
+## Development
+
+### Available make commands
+
+```
+make build      - Build CLI
+make test       - Run tests
+make clean      - Clean build artifacts
+make clean-empty - Remove empty directories
+make dist       - Create distribution package
+make help       - Show help
+make push       - Push to GitHub repository
 ```
 
 ## License

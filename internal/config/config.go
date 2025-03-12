@@ -9,24 +9,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Database types
+const (
+	DBTypeFile   = "file"
+	DBTypeSQLite = "sqlite"
+	DBTypeMySQL  = "mysql"
+)
+
 // Config represents the application configuration
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
 	Database DatabaseConfig `yaml:"database"`
 	GitHub   GitHubConfig   `yaml:"github"`
 	Logging  LoggingConfig  `yaml:"logging"`
 }
 
-// ServerConfig represents the server configuration
-type ServerConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
-}
-
 // DatabaseConfig represents the database configuration
 type DatabaseConfig struct {
-	Type string `yaml:"type"` // sqlite or mysql
-	Path string `yaml:"path"` // For SQLite
+	Type string `yaml:"type"` // file, sqlite, or mysql
+	Path string `yaml:"path"` // For file or SQLite
 	// MySQL configuration (for future use)
 	Host     string `yaml:"host,omitempty"`
 	Port     int    `yaml:"port,omitempty"`
@@ -50,12 +50,8 @@ type LoggingConfig struct {
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
-		Server: ServerConfig{
-			Host: "127.0.0.1",
-			Port: 8080,
-		},
 		Database: DatabaseConfig{
-			Type: "sqlite",
+			Type: DBTypeFile,
 			Path: "data/github-repos.db",
 		},
 		GitHub: GitHubConfig{
@@ -94,16 +90,6 @@ func Load(configPath string) (*Config, error) {
 
 // loadFromEnv loads configuration from environment variables
 func loadFromEnv(config *Config) (*Config, error) {
-	// Server configuration
-	if host := os.Getenv("GHREPOS_HOST"); host != "" {
-		config.Server.Host = host
-	}
-	if portStr := os.Getenv("GHREPOS_PORT"); portStr != "" {
-		if port, err := strconv.Atoi(portStr); err == nil && port > 0 {
-			config.Server.Port = port
-		}
-	}
-
 	// Database configuration
 	if dbType := os.Getenv("GHREPOS_DB_TYPE"); dbType != "" {
 		config.Database.Type = dbType

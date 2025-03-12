@@ -1,65 +1,42 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
-	"strings"
+	"strconv"
+	"time"
+
+	"github.com/siddontang/github-repos-management/internal/config"
+	"github.com/siddontang/github-repos-management/internal/models"
+	"github.com/siddontang/github-repos-management/internal/service"
 )
 
-// Client represents an API client
+// Client represents a service client wrapper
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	service *service.Service
+	ctx     context.Context
 }
 
-// NewClient creates a new API client
-func NewClient(baseURL string) *Client {
-	return &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{},
+// NewClient creates a new service client wrapper
+func NewClient() (*Client, error) {
+	// Load default configuration
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: config.DBTypeFile, // Use file database by default
+			Path: "data/github-repos.db",
+		},
 	}
-}
 
-// Repository represents a GitHub repository
-type Repository struct {
-	Owner        string `json:"owner"`
-	Name         string `json:"name"`
-	FullName     string `json:"full_name"`
-	Description  string `json:"description"`
-	URL          string `json:"url"`
-	HTMLURL      string `json:"html_url"`
-	IsPrivate    bool   `json:"is_private"`
-	LastSyncedAt string `json:"last_synced_at"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-}
+	// Create service
+	svc, err := service.NewService(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service: %w", err)
+	}
 
-// PullRequest represents a GitHub pull request
-type PullRequest struct {
-	Number             int    `json:"number"`
-	Title              string `json:"title"`
-	State              string `json:"state"`
-	HTMLURL            string `json:"html_url"`
-	UserLogin          string `json:"user_login"`
-	CreatedAt          string `json:"created_at"`
-	UpdatedAt          string `json:"updated_at"`
-	RepositoryFullName string `json:"RepositoryFullName"`
-}
-
-// Issue represents a GitHub issue
-type Issue struct {
-	Number             int    `json:"number"`
-	Title              string `json:"title"`
-	State              string `json:"state"`
-	HTMLURL            string `json:"html_url"`
-	UserLogin          string `json:"user_login"`
-	CreatedAt          string `json:"created_at"`
-	UpdatedAt          string `json:"updated_at"`
-	RepositoryFullName string `json:"RepositoryFullName"`
+	return &Client{
+		service: svc,
+		ctx:     context.Background(),
+	}, nil
 }
 
 // Pagination represents pagination information
@@ -70,185 +47,77 @@ type Pagination struct {
 	TotalPages int `json:"total_pages"`
 }
 
-// ErrorResponse represents an error response
-type ErrorResponse struct {
-	Code    string      `json:"code"`
-	Message string      `json:"message"`
-	Details interface{} `json:"details,omitempty"`
-}
-
 // ListRepositoriesResponse represents a response for listing repositories
 type ListRepositoriesResponse struct {
-	Data       []*Repository `json:"data"`
-	Pagination *Pagination   `json:"pagination"`
+	Data       []*models.Repository `json:"data"`
+	Pagination *Pagination          `json:"pagination"`
 }
 
 // ListPullRequestsResponse represents a response for listing pull requests
 type ListPullRequestsResponse struct {
-	Data       []*PullRequest `json:"data"`
-	Pagination *Pagination    `json:"pagination"`
+	Data       []*models.PullRequest `json:"data"`
+	Pagination *Pagination           `json:"pagination"`
 }
 
 // ListIssuesResponse represents a response for listing issues
 type ListIssuesResponse struct {
-	Data       []*Issue    `json:"data"`
-	Pagination *Pagination `json:"pagination"`
+	Data       []*models.Issue `json:"data"`
+	Pagination *Pagination     `json:"pagination"`
 }
 
-// ListRepositories lists all repositories
+// ListRepositories lists repositories that have been added
 func (c *Client) ListRepositories(page, perPage int) (*ListRepositoriesResponse, error) {
-	// Build URL
-	u, err := url.Parse(fmt.Sprintf("%s/api/v1/repositories", c.baseURL))
+	// Get repositories from service
+	repos, total, err := c.service.ListRepositories(c.ctx, page, perPage)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list repositories: %w", err)
 	}
 
-	// Add query parameters
-	q := u.Query()
-	q.Set("page", fmt.Sprintf("%d", page))
-	q.Set("per_page", fmt.Sprintf("%d", perPage))
-	u.RawQuery = q.Encode()
-
-	// Make request
-	req, err := http.NewRequest("GET", u.String(), nil)
-	if err != nil {
-		return nil, err
+	// Create pagination
+	totalPages := (total + perPage - 1) / perPage
+	if totalPages < 1 {
+		totalPages = 1
 	}
 
-	// Set headers
-	req.Header.Set("Accept", "application/json")
-
-	// Send request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp)
-	}
-
-	// Parse response
-	var response ListRepositoriesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-
-	return &response, nil
+	return &ListRepositoriesResponse{
+		Data: repos,
+		Pagination: &Pagination{
+			Page:       page,
+			PerPage:    perPage,
+			Total:      total,
+			TotalPages: totalPages,
+		},
+	}, nil
 }
 
-// AddRepository adds a new repository
-func (c *Client) AddRepository(fullName string) (*Repository, error) {
-	// Build URL
-	u, err := url.Parse(fmt.Sprintf("%s/api/v1/repositories", c.baseURL))
+// AddRepository adds a new repository to track
+func (c *Client) AddRepository(fullName string) (*models.Repository, error) {
+	// Add repository using service
+	repo, err := c.service.AddRepository(c.ctx, fullName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to add repository: %w", err)
 	}
 
-	// Build request body
-	body := map[string]string{
-		"full_name": fullName,
-	}
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	// Make request
-	req, err := http.NewRequest("POST", u.String(), bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-
-	// Set headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	// Send request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusCreated {
-		return nil, c.handleErrorResponse(resp)
-	}
-
-	// Parse response
-	var repository Repository
-	if err := json.NewDecoder(resp.Body).Decode(&repository); err != nil {
-		return nil, err
-	}
-
-	return &repository, nil
+	return repo, nil
 }
 
 // GetRepository gets a repository by owner and name
-func (c *Client) GetRepository(owner, name string) (*Repository, error) {
-	// Build URL
-	u, err := url.Parse(fmt.Sprintf("%s/api/v1/repositories/%s/%s", c.baseURL, owner, name))
+func (c *Client) GetRepository(owner, name string) (*models.Repository, error) {
+	// Get repository using service
+	repo, err := c.service.GetRepository(c.ctx, owner, name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get repository: %w", err)
 	}
 
-	// Make request
-	req, err := http.NewRequest("GET", u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Set headers
-	req.Header.Set("Accept", "application/json")
-
-	// Send request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp)
-	}
-
-	// Parse response
-	var repository Repository
-	if err := json.NewDecoder(resp.Body).Decode(&repository); err != nil {
-		return nil, err
-	}
-
-	return &repository, nil
+	return repo, nil
 }
 
-// RemoveRepository removes a repository
+// RemoveRepository removes a repository from tracking
 func (c *Client) RemoveRepository(owner, name string) error {
-	// Build URL
-	u, err := url.Parse(fmt.Sprintf("%s/api/v1/repositories/%s/%s", c.baseURL, owner, name))
+	// Remove repository using service
+	err := c.service.DeleteRepository(c.ctx, owner, name)
 	if err != nil {
-		return err
-	}
-
-	// Make request
-	req, err := http.NewRequest("DELETE", u.String(), nil)
-	if err != nil {
-		return err
-	}
-
-	// Send request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusNoContent {
-		return c.handleErrorResponse(resp)
+		return fmt.Errorf("failed to remove repository: %w", err)
 	}
 
 	return nil
@@ -256,28 +125,10 @@ func (c *Client) RemoveRepository(owner, name string) error {
 
 // RefreshRepository forces a refresh of repository data
 func (c *Client) RefreshRepository(owner, name string) error {
-	// Build URL
-	u, err := url.Parse(fmt.Sprintf("%s/api/v1/repositories/%s/%s/refresh", c.baseURL, owner, name))
+	// Refresh repository using service
+	err := c.service.RefreshRepository(c.ctx, owner, name)
 	if err != nil {
-		return err
-	}
-
-	// Make request
-	req, err := http.NewRequest("POST", u.String(), nil)
-	if err != nil {
-		return err
-	}
-
-	// Send request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusAccepted {
-		return c.handleErrorResponse(resp)
+		return fmt.Errorf("failed to refresh repository: %w", err)
 	}
 
 	return nil
@@ -285,174 +136,131 @@ func (c *Client) RefreshRepository(owner, name string) error {
 
 // ListPullRequests lists pull requests with filtering and pagination
 func (c *Client) ListPullRequests(params map[string]string) (*ListPullRequestsResponse, error) {
-	// Build URL
-	u, err := url.Parse(fmt.Sprintf("%s/api/v1/pulls", c.baseURL))
+	// Create filter
+	filter := &models.PullRequestFilter{
+		State:     params["state"],
+		Author:    params["author"],
+		Repo:      params["repo"],
+		Label:     params["label"],
+		SortBy:    params["sort"],
+		Direction: params["direction"],
+	}
+
+	// Parse pagination
+	page := 1
+	perPage := 30
+
+	if pageStr, ok := params["page"]; ok && pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	if perPageStr, ok := params["per_page"]; ok && perPageStr != "" {
+		if pp, err := strconv.Atoi(perPageStr); err == nil && pp > 0 {
+			perPage = pp
+		}
+	}
+
+	filter.Page = page
+	filter.PerPage = perPage
+
+	// Parse since date
+	if sinceStr, ok := params["since"]; ok && sinceStr != "" {
+		if since, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			filter.Since = since
+		}
+	}
+
+	// Get pull requests from service
+	prs, pagination, err := c.service.ListPullRequests(c.ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list pull requests: %w", err)
 	}
 
-	// Add query parameters
-	q := u.Query()
-	for k, v := range params {
-		q.Set(k, v)
-	}
-	u.RawQuery = q.Encode()
-
-	// Make request
-	req, err := http.NewRequest("GET", u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Set headers
-	req.Header.Set("Accept", "application/json")
-
-	// Send request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp)
-	}
-
-	// Parse response
-	var response ListPullRequestsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-
-	return &response, nil
+	return &ListPullRequestsResponse{
+		Data: prs,
+		Pagination: &Pagination{
+			Page:       pagination.Page,
+			PerPage:    pagination.PerPage,
+			Total:      pagination.Total,
+			TotalPages: pagination.TotalPages,
+		},
+	}, nil
 }
 
 // ListIssues lists issues with filtering and pagination
 func (c *Client) ListIssues(params map[string]string) (*ListIssuesResponse, error) {
-	// Build URL
-	u, err := url.Parse(fmt.Sprintf("%s/api/v1/issues", c.baseURL))
+	// Create filter
+	filter := &models.IssueFilter{
+		State:     params["state"],
+		Author:    params["author"],
+		Repo:      params["repo"],
+		Label:     params["label"],
+		SortBy:    params["sort"],
+		Direction: params["direction"],
+	}
+
+	// Parse pagination
+	page := 1
+	perPage := 30
+
+	if pageStr, ok := params["page"]; ok && pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	if perPageStr, ok := params["per_page"]; ok && perPageStr != "" {
+		if pp, err := strconv.Atoi(perPageStr); err == nil && pp > 0 {
+			perPage = pp
+		}
+	}
+
+	filter.Page = page
+	filter.PerPage = perPage
+
+	// Parse since date
+	if sinceStr, ok := params["since"]; ok && sinceStr != "" {
+		if since, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			filter.Since = since
+		}
+	}
+
+	// Get issues from service
+	issues, pagination, err := c.service.ListIssues(c.ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list issues: %w", err)
 	}
 
-	// Add query parameters
-	q := u.Query()
-	for k, v := range params {
-		q.Set(k, v)
-	}
-	u.RawQuery = q.Encode()
-
-	// Make request
-	req, err := http.NewRequest("GET", u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Set headers
-	req.Header.Set("Accept", "application/json")
-
-	// Send request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp)
-	}
-
-	// Parse response
-	var response ListIssuesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-
-	return &response, nil
+	return &ListIssuesResponse{
+		Data: issues,
+		Pagination: &Pagination{
+			Page:       pagination.Page,
+			PerPage:    pagination.PerPage,
+			Total:      pagination.Total,
+			TotalPages: pagination.TotalPages,
+		},
+	}, nil
 }
 
 // RefreshAll forces a refresh of all repository data
 func (c *Client) RefreshAll() error {
-	// Build URL
-	u, err := url.Parse(fmt.Sprintf("%s/api/v1/refresh", c.baseURL))
+	// Get all repositories
+	err := c.service.RefreshAll(c.ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to refresh all repositories: %w", err)
 	}
-
-	// Make request
-	req, err := http.NewRequest("POST", u.String(), nil)
-	if err != nil {
-		return err
-	}
-
-	// Send request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusAccepted {
-		return c.handleErrorResponse(resp)
-	}
-
 	return nil
 }
 
-// GetStatus returns the current status of the service
+// GetStatus returns the current status of the client
 func (c *Client) GetStatus() (map[string]interface{}, error) {
-	// Build URL
-	u, err := url.Parse(fmt.Sprintf("%s/api/v1/status", c.baseURL))
+	// Get status from service
+	status, err := c.service.GetStatus(c.ctx)
 	if err != nil {
-		return nil, err
-	}
-
-	// Make request
-	req, err := http.NewRequest("GET", u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Set headers
-	req.Header.Set("Accept", "application/json")
-
-	// Send request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp)
-	}
-
-	// Parse response
-	var status map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get status: %w", err)
 	}
 
 	return status, nil
-}
-
-// handleErrorResponse handles error responses
-func (c *Client) handleErrorResponse(resp *http.Response) error {
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read error response: %w", err)
-	}
-
-	// Try to parse as JSON
-	var errorResponse ErrorResponse
-	if err := json.Unmarshal(body, &errorResponse); err != nil {
-		return fmt.Errorf("HTTP error: %s", resp.Status)
-	}
-
-	return fmt.Errorf("%s: %s", errorResponse.Code, errorResponse.Message)
 }

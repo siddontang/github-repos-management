@@ -34,6 +34,7 @@ Thumbs.db
 
 # Application specific files
 config.yaml
+data/   
 *.log
 *.db
 *.sqlite

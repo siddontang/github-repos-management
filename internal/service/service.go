@@ -9,19 +9,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/siddontang/github-repos-management/internal/cache"
-	"github.com/siddontang/github-repos-management/internal/cache/memory"
 	"github.com/siddontang/github-repos-management/internal/config"
+	"github.com/siddontang/github-repos-management/internal/db"
+	"github.com/siddontang/github-repos-management/internal/db/file"
 	"github.com/siddontang/github-repos-management/internal/github"
 	"github.com/siddontang/github-repos-management/internal/models"
 )
 
 // Service represents the main service for the GitHub repository management
 type Service struct {
-	config     *config.Config
-	cache      cache.Cache
-	ghClient   github.ClientInterface
-	syncMutex  sync.Mutex
+	config    *config.Config
+	db        db.DB
+	ghClient  github.ClientInterface
+	syncMutex sync.Mutex
+
 	syncStatus map[string]string // repository full name -> status
 	startTime  time.Time
 }
@@ -31,28 +32,30 @@ func NewService(cfg *config.Config) (*Service, error) {
 	// Create GitHub client
 	ghClient := github.NewClient()
 
-	// Create cache provider based on configuration
-	var cacheProvider cache.Provider
+	// Create database provider based on configuration
+	var dbProvider db.Provider
 	switch cfg.Database.Type {
-	case "sqlite":
+	case config.DBTypeFile:
+		dbProvider = file.NewProvider()
+	case config.DBTypeSQLite:
 		// TODO: Implement SQLite provider
-		cacheProvider = memory.NewProvider() // Use memory cache for now
-	case "mysql":
+		return nil, fmt.Errorf("sqlite database not implemented yet")
+	case config.DBTypeMySQL:
 		// TODO: Implement MySQL provider
-		cacheProvider = memory.NewProvider() // Use memory cache for now
+		return nil, fmt.Errorf("mysql database not implemented yet")
 	default:
-		cacheProvider = memory.NewProvider()
+		return nil, fmt.Errorf("unsupported database type: %s", cfg.Database.Type)
 	}
 
-	// Create cache instance
-	cacheInstance, err := cacheProvider(cfg.Database)
+	// Create database instance
+	dbInstance, err := dbProvider(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cache: %w", err)
+		return nil, fmt.Errorf("failed to create database: %w", err)
 	}
 
 	return &Service{
 		config:     cfg,
-		cache:      cacheInstance,
+		db:         dbInstance,
 		ghClient:   ghClient,
 		syncStatus: make(map[string]string),
 		startTime:  time.Now(),
@@ -61,7 +64,7 @@ func NewService(cfg *config.Config) (*Service, error) {
 
 // Close closes the service and its resources
 func (s *Service) Close() error {
-	return s.cache.Close()
+	return s.db.Close()
 }
 
 // Repository operations
@@ -76,9 +79,9 @@ func (s *Service) AddRepository(ctx context.Context, fullName string) (*models.R
 	owner, name := parts[0], parts[1]
 
 	// Check if repository already exists
-	existingRepo, err := s.cache.GetRepository(ctx, owner, name)
+	existingRepo, err := s.db.GetRepository(ctx, owner, name)
 	if err == nil && existingRepo != nil {
-		log.Printf("Repository %s already exists in cache", fullName)
+		log.Printf("Repository %s already exists in database", fullName)
 		return existingRepo, nil
 	}
 
@@ -107,30 +110,27 @@ func (s *Service) AddRepository(ctx context.Context, fullName string) (*models.R
 		UpdatedAt:    ghRepo.UpdatedAt,
 	}
 
-	// Add repository to cache
-	if err := s.cache.AddRepository(ctx, repo); err != nil {
-		log.Printf("Error adding repository to cache: %v", err)
-		return nil, fmt.Errorf("failed to add repository to cache: %w", err)
+	// Add repository to database
+	if err := s.db.AddRepository(ctx, repo); err != nil {
+		log.Printf("Error adding repository to database: %v", err)
+		return nil, fmt.Errorf("failed to add repository to database: %w", err)
 	}
 
-	log.Printf("Successfully added repository to cache: %s", fullName)
+	log.Printf("Successfully added repository to database: %s", fullName)
 
-	// Start background sync
-	go func() {
-		log.Printf("Starting background sync for repository: %s", fullName)
-		if err := s.syncRepository(context.Background(), owner, name); err != nil {
-			log.Printf("Error syncing repository %s: %v", fullName, err)
-		} else {
-			log.Printf("Successfully synced repository: %s", fullName)
-		}
-	}()
+	log.Printf("Syncing repository: %s", fullName)
+	if err := s.syncRepository(context.Background(), owner, name); err != nil {
+		log.Printf("Error syncing repository %s: %v", fullName, err)
+	} else {
+		log.Printf("Successfully synced repository: %s", fullName)
+	}
 
 	return repo, nil
 }
 
 // GetRepository gets a repository by owner and name
 func (s *Service) GetRepository(ctx context.Context, owner, name string) (*models.Repository, error) {
-	repo, err := s.cache.GetRepository(ctx, owner, name)
+	repo, err := s.db.GetRepository(ctx, owner, name)
 	if err != nil {
 		return nil, ErrRepositoryNotFound
 	}
@@ -139,12 +139,12 @@ func (s *Service) GetRepository(ctx context.Context, owner, name string) (*model
 
 // ListRepositories lists all tracked repositories
 func (s *Service) ListRepositories(ctx context.Context, page, perPage int) ([]*models.Repository, int, error) {
-	return s.cache.ListRepositories(ctx, page, perPage)
+	return s.db.ListRepositories(ctx, page, perPage)
 }
 
 // DeleteRepository removes a repository from tracking
 func (s *Service) DeleteRepository(ctx context.Context, owner, name string) error {
-	err := s.cache.DeleteRepository(ctx, owner, name)
+	err := s.db.DeleteRepository(ctx, owner, name)
 	if err != nil {
 		return ErrRepositoryNotFound
 	}
@@ -154,19 +154,17 @@ func (s *Service) DeleteRepository(ctx context.Context, owner, name string) erro
 // RefreshRepository forces a refresh of repository data
 func (s *Service) RefreshRepository(ctx context.Context, owner, name string) error {
 	// Check if repository exists
-	_, err := s.cache.GetRepository(ctx, owner, name)
+	_, err := s.db.GetRepository(ctx, owner, name)
 	if err != nil {
 		return ErrRepositoryNotFound
 	}
 
-	// Start sync in background
-	go func() {
-		syncCtx := context.Background()
-		if err := s.syncRepository(syncCtx, owner, name); err != nil {
-			// Log the error but don't return it since we're in a goroutine
-			fmt.Printf("Error refreshing repository %s/%s: %v\n", owner, name, err)
-		}
-	}()
+	log.Printf("Refreshing repository: %s/%s", owner, name)
+	syncCtx := context.Background()
+	if err := s.syncRepository(syncCtx, owner, name); err != nil {
+		// Log the error but don't return it since we're in a goroutine
+		fmt.Printf("Error refreshing repository %s/%s: %v\n", owner, name, err)
+	}
 
 	return nil
 }
@@ -187,8 +185,8 @@ func (s *Service) syncRepository(ctx context.Context, owner, name string) error 
 		s.syncMutex.Unlock()
 	}()
 
-	// Get repository from cache
-	repo, err := s.cache.GetRepository(ctx, owner, name)
+	// Get repository from database
+	repo, err := s.db.GetRepository(ctx, owner, name)
 	if err != nil {
 		s.syncMutex.Lock()
 		s.syncStatus[fullName] = fmt.Sprintf("error: %v", err)
@@ -214,7 +212,7 @@ func (s *Service) syncRepository(ctx context.Context, owner, name string) error 
 
 	// Update last synced time after successful sync
 	repo.LastSyncedAt = time.Now()
-	if err := s.cache.UpdateRepository(ctx, repo); err != nil {
+	if err := s.db.UpdateRepository(ctx, repo); err != nil {
 		return fmt.Errorf("failed to update last synced time: %w", err)
 	}
 
@@ -224,7 +222,7 @@ func (s *Service) syncRepository(ctx context.Context, owner, name string) error 
 // syncPullRequests syncs pull requests for a repository
 func (s *Service) syncPullRequests(ctx context.Context, owner, name string) error {
 	// Get repository
-	repo, err := s.cache.GetRepository(ctx, owner, name)
+	repo, err := s.db.GetRepository(ctx, owner, name)
 	if err != nil {
 		return fmt.Errorf("repository not found: %w", err)
 	}
@@ -265,15 +263,15 @@ func (s *Service) syncPullRequests(ctx context.Context, owner, name string) erro
 		}
 
 		// Check if pull request exists
-		existingPR, err := s.cache.GetPullRequest(ctx, repo.FullName, ghPR.Number)
+		existingPR, err := s.db.GetPullRequest(ctx, repo.FullName, ghPR.Number)
 		if err == nil && existingPR != nil {
 			// Update existing pull request
-			if err := s.cache.UpdatePullRequest(ctx, pr); err != nil {
+			if err := s.db.UpdatePullRequest(ctx, pr); err != nil {
 				continue
 			}
 		} else {
 			// Add new pull request
-			if err := s.cache.AddPullRequest(ctx, pr); err != nil {
+			if err := s.db.AddPullRequest(ctx, pr); err != nil {
 				continue
 			}
 		}
@@ -288,16 +286,16 @@ func (s *Service) syncPullRequests(ctx context.Context, owner, name string) erro
 			}
 
 			// Check if label exists
-			existingLabel, err := s.cache.GetLabel(ctx, ghLabel.Name)
+			existingLabel, err := s.db.GetLabel(ctx, ghLabel.Name)
 			if err != nil || existingLabel == nil {
 				// Add new label
-				if err := s.cache.AddLabel(ctx, label); err != nil {
+				if err := s.db.AddLabel(ctx, label); err != nil {
 					continue
 				}
 			}
 
 			// Add label to pull request
-			if err := s.cache.AddPullRequestLabel(ctx, repo.FullName, ghPR.Number, ghLabel.Name); err != nil {
+			if err := s.db.AddPullRequestLabel(ctx, repo.FullName, ghPR.Number, ghLabel.Name); err != nil {
 				// Ignore errors
 			}
 		}
@@ -309,7 +307,7 @@ func (s *Service) syncPullRequests(ctx context.Context, owner, name string) erro
 // syncIssues syncs issues for a repository
 func (s *Service) syncIssues(ctx context.Context, owner, name string) error {
 	// Get repository
-	repo, err := s.cache.GetRepository(ctx, owner, name)
+	repo, err := s.db.GetRepository(ctx, owner, name)
 	if err != nil {
 		return fmt.Errorf("repository not found: %w", err)
 	}
@@ -349,15 +347,15 @@ func (s *Service) syncIssues(ctx context.Context, owner, name string) error {
 		}
 
 		// Check if issue exists
-		existingIssue, err := s.cache.GetIssue(ctx, repo.FullName, ghIssue.Number)
+		existingIssue, err := s.db.GetIssue(ctx, repo.FullName, ghIssue.Number)
 		if err == nil && existingIssue != nil {
 			// Update existing issue
-			if err := s.cache.UpdateIssue(ctx, issue); err != nil {
+			if err := s.db.UpdateIssue(ctx, issue); err != nil {
 				continue
 			}
 		} else {
 			// Add new issue
-			if err := s.cache.AddIssue(ctx, issue); err != nil {
+			if err := s.db.AddIssue(ctx, issue); err != nil {
 				continue
 			}
 		}
@@ -372,16 +370,16 @@ func (s *Service) syncIssues(ctx context.Context, owner, name string) error {
 			}
 
 			// Check if label exists
-			existingLabel, err := s.cache.GetLabel(ctx, ghLabel.Name)
+			existingLabel, err := s.db.GetLabel(ctx, ghLabel.Name)
 			if err != nil || existingLabel == nil {
 				// Add new label
-				if err := s.cache.AddLabel(ctx, label); err != nil {
+				if err := s.db.AddLabel(ctx, label); err != nil {
 					continue
 				}
 			}
 
 			// Add label to issue
-			if err := s.cache.AddIssueLabel(ctx, repo.FullName, ghIssue.Number, ghLabel.Name); err != nil {
+			if err := s.db.AddIssueLabel(ctx, repo.FullName, ghIssue.Number, ghLabel.Name); err != nil {
 				// Ignore errors
 			}
 		}
@@ -413,14 +411,14 @@ func (s *Service) listAllPullRequests(ctx context.Context, filter *models.PullRe
 		owner, name := parts[0], parts[1]
 
 		// Get the specific repository
-		repo, err := s.cache.GetRepository(ctx, owner, name)
+		repo, err := s.db.GetRepository(ctx, owner, name)
 		if err != nil {
 			return nil, nil, ErrRepositoryNotFound
 		}
 		repos = []*models.Repository{repo}
 	} else {
 		// Get all repositories
-		repos, _, err = s.cache.ListRepositories(ctx, 1, 1000) // Assuming we won't have more than 1000 repos
+		repos, _, err = s.db.ListRepositories(ctx, 1, 1000) // Assuming we won't have more than 1000 repos
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to list repositories: %w", err)
 		}
@@ -429,7 +427,7 @@ func (s *Service) listAllPullRequests(ctx context.Context, filter *models.PullRe
 	// Collect all pull requests
 	var allPRs []*models.PullRequest
 	for _, repo := range repos {
-		prs, _, err := s.cache.ListPullRequests(ctx, repo.FullName, 1, 1000) // Get all PRs, we'll paginate later
+		prs, _, err := s.db.ListPullRequests(ctx, repo.FullName, 1, 1000) // Get all PRs, we'll paginate later
 		if err != nil {
 			// Log error but continue
 			continue
@@ -517,14 +515,14 @@ func (s *Service) listAllIssues(ctx context.Context, filter *models.IssueFilter)
 		owner, name := parts[0], parts[1]
 
 		// Get the specific repository
-		repo, err := s.cache.GetRepository(ctx, owner, name)
+		repo, err := s.db.GetRepository(ctx, owner, name)
 		if err != nil {
 			return nil, nil, ErrRepositoryNotFound
 		}
 		repos = []*models.Repository{repo}
 	} else {
 		// Get all repositories
-		repos, _, err = s.cache.ListRepositories(ctx, 1, 1000) // Assuming we won't have more than 1000 repos
+		repos, _, err = s.db.ListRepositories(ctx, 1, 1000) // Assuming we won't have more than 1000 repos
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to list repositories: %w", err)
 		}
@@ -533,7 +531,7 @@ func (s *Service) listAllIssues(ctx context.Context, filter *models.IssueFilter)
 	// Collect all issues
 	var allIssues []*models.Issue
 	for _, repo := range repos {
-		issues, _, err := s.cache.ListIssues(ctx, repo.FullName, 1, 1000) // Get all issues, we'll paginate later
+		issues, _, err := s.db.ListIssues(ctx, repo.FullName, 1, 1000) // Get all issues, we'll paginate later
 		if err != nil {
 			// Log error but continue
 			continue
@@ -603,29 +601,33 @@ func (s *Service) listAllIssues(ctx context.Context, filter *models.IssueFilter)
 // RefreshAll forces a refresh of all repository data
 func (s *Service) RefreshAll(ctx context.Context) error {
 	// Get all repositories
-	repos, _, err := s.cache.ListRepositories(ctx, 1, 1000) // Assuming we won't have more than 1000 repos
+	repos, _, err := s.db.ListRepositories(ctx, 1, 1000) // Assuming we won't have more than 1000 repos
 	if err != nil {
 		return fmt.Errorf("failed to list repositories: %w", err)
 	}
 
 	// Refresh each repository
+	wg := sync.WaitGroup{}
 	for _, repo := range repos {
+		wg.Add(1)
 		go func(owner, name string) {
+			defer wg.Done()
 			syncCtx := context.Background()
+			log.Printf("Refreshing repository: %s/%s", owner, name)
 			if err := s.syncRepository(syncCtx, owner, name); err != nil {
 				// Log the error but don't return it since we're in a goroutine
 				fmt.Printf("Error refreshing repository %s/%s: %v\n", owner, name, err)
 			}
 		}(repo.Owner, repo.Name)
 	}
-
+	wg.Wait()
 	return nil
 }
 
 // GetStatus returns the current status of the service
 func (s *Service) GetStatus(ctx context.Context) (map[string]interface{}, error) {
 	// Get all repositories
-	repos, total, err := s.cache.ListRepositories(ctx, 1, 1000)
+	repos, total, err := s.db.ListRepositories(ctx, 1, 1000)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list repositories: %w", err)
 	}

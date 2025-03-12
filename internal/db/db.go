@@ -1,13 +1,14 @@
-package cache
+package db
 
 import (
 	"context"
 
+	"github.com/siddontang/github-repos-management/internal/config"
 	"github.com/siddontang/github-repos-management/internal/models"
 )
 
-// Cache defines the interface for caching GitHub data
-type Cache interface {
+// DB defines the interface for storing GitHub data
+type DB interface {
 	// Repository operations
 	AddRepository(ctx context.Context, repo *models.Repository) error
 	GetRepository(ctx context.Context, owner, name string) (*models.Repository, error)
@@ -49,7 +50,10 @@ type Cache interface {
 	// Maintenance operations
 	Close() error
 	Ping(ctx context.Context) error
+
+	// Sync operations
+	Sync() error
 }
 
-// Provider is a function that creates a new cache instance
-type Provider func(config interface{}) (Cache, error)
+// Provider is a function that creates a new db instance
+type Provider func(config *config.Config) (DB, error)
